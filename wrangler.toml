@@ -1,0 +1,20 @@
+name = "pgmq-rest"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Import map for Deno-style npm: specifiers
+import_map = "./deno.json"
+
+[vars]
+DB_HOST = "localhost"
+DB_PORT = "5432"
+DB_NAME = "postgres"
+DB_USER = "postgres"
+DB_PASSWORD = "postgres"
+DB_POOL_SIZE = "20"
+
+# Uncomment and fill in to use Cloudflare Hyperdrive for connection pooling:
+# [[hyperdrive]]
+# binding = "HYPERDRIVE"
+# id = "your-hyperdrive-id"

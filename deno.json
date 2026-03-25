@@ -1,26 +1,27 @@
 {
+  "imports": {
+    "hono": "npm:hono",
+    "@hono/swagger-ui": "npm:@hono/swagger-ui",
+    "pg": "npm:pg"
+  },
+  "tasks": {
+    "dev": "deno run --allow-env --allow-net src/index.ts",
+    "deploy": "wrangler deploy",
+    "test": "deno test --allow-env --allow-net src/index.test.ts"
+  },
   "compilerOptions": {
     "target": "esnext",
     "module": "esnext",
     "moduleResolution": "bundler",
-    "types": ["bun-types"],
-    "esModuleInterop": true,
-    
-    // Strict Type-Checking Options
     "strict": true,
     "noImplicitAny": true,
     "strictNullChecks": true,
     "strictFunctionTypes": true,
     "useUnknownInCatchVariables": true,
     "alwaysStrict": true,
-    
-    // Additional Checks
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noImplicitReturns": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUncheckedIndexedAccess": true,
-  },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+    "noFallthroughCasesInSwitch": true
+  }
 }

@@ -3,8 +3,7 @@
 > Because sometimes your messages need a queue, and your queues need a REST API.
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Docker Pulls](https://img.shields.io/docker/pulls/eichenroth/pgmq-rest)](https://hub.docker.com/r/eichenroth/pgmq-rest)
-[![Tests](https://github.com/eichenroth/pgmq-rest/actions/workflows/test.yml/badge.svg)](https://github.com/eichenroth/pgmq-rest/actions/workflows/test.yml)
+[![Tests](https://github.com/IntranetFactory/pgmq-rest/actions/workflows/test.yml/badge.svg)](https://github.com/IntranetFactory/pgmq-rest/actions/workflows/test.yml)
 
 ## Overview
 
@@ -16,26 +15,53 @@ pgmq-rest provides a REST API for [PGMQ](https://github.com/tembo-io/pgmq) (Post
 - 🔄 Support for sending and receiving messages
 - 📦 Batch operations for better performance
 - 📊 Queue metrics and monitoring
-- 🐳 Docker and Docker Compose support
+- ☁️ Cloudflare Worker deployment via Wrangler
 - 📝 Swagger documentation included
 
-## Quick Start
+## Quick Start (Local Development)
 
-The fastest way to get started is using Docker Compose:
+1. Start a local PostgreSQL instance with pgmq:
+
+    ```bash
+    # Cleanup existing container and volumes
+    docker stop pgmq 2>/dev/null || true
+    docker rm pgmq 2>/dev/null || true
+    docker volume rm pgmq_data 2>/dev/null || true
+
+    # Start PGMQ
+    docker run -d --name pgmq \
+      -p 5432:5432 \
+      -e POSTGRES_USER=postgres \
+      -e POSTGRES_PASSWORD=postgres \
+      -e POSTGRES_DB=postgres \
+      -v pgmq_data:/var/lib/postgresql/data \
+      -v $(pwd)/init-pgmq.sql:/docker-entrypoint-initdb.d/init-pgmq.sql \
+      tembo.docker.scarf.sh/tembo/pg17-pgmq:latest
+    ```
+
+2. Run the development server:
+
+    ```bash
+    DB_HOST=localhost DB_PORT=5432 DB_USER=postgres DB_PASSWORD=postgres DB_NAME=postgres DB_POOL_SIZE=20 deno task dev
+    ```
+
+3. Visit http://localhost:8080/docs for the Swagger UI.
+
+## Quick Start (Docker Compose for Local Testing)
+
+The `example/` directory contains a Docker Compose setup for running PGMQ locally:
 
 ```bash
 cd example
 docker-compose up -d
 ```
 
-To stop the stack:
+To stop:
 ```bash
 docker-compose down -v
 ```
 
 ## Usage Example
-
-Here's a quick example of how to use the API:
 
 ```bash
 # Send a single message
@@ -67,13 +93,25 @@ curl -X POST http://localhost:8080/api/v1/read_with_poll \
 
 ## API Reference
 
-The API provides the following main endpoints:
+The API provides the following endpoints:
 
 - `POST /api/v1/send` - Send a single message to a queue
 - `POST /api/v1/send_batch` - Send multiple messages to a queue
 - `POST /api/v1/read` - Read messages from a queue
 - `POST /api/v1/read_with_poll` - Read messages with polling
-- `GET /api/v1/metrics` - Get queue metrics
+- `POST /api/v1/pop` - Pop a message from a queue
+- `POST /api/v1/delete` - Delete a message
+- `POST /api/v1/delete_batch` - Delete multiple messages
+- `POST /api/v1/purge_queue` - Purge all messages from a queue
+- `POST /api/v1/archive` - Archive a message
+- `POST /api/v1/archive_batch` - Archive multiple messages
+- `POST /api/v1/create` - Create a queue
+- `POST /api/v1/create_unlogged` - Create an unlogged queue
+- `POST /api/v1/drop_queue` - Drop a queue
+- `POST /api/v1/set_vt` - Set message visibility timeout
+- `POST /api/v1/list_queues` - List all queues
+- `POST /api/v1/metrics` - Get metrics for a queue
+- `POST /api/v1/metrics_all` - Get metrics for all queues
 
 For detailed API documentation, visit http://localhost:8080/docs after starting the service.
 
@@ -81,12 +119,48 @@ For detailed API documentation, visit http://localhost:8080/docs after starting 
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DB_HOST` | PostgreSQL host | postgres |
+| `DB_HOST` | PostgreSQL host | localhost |
 | `DB_PORT` | PostgreSQL port | 5432 |
 | `DB_NAME` | Database name | postgres |
 | `DB_USER` | Database user | postgres |
 | `DB_PASSWORD` | Database password | postgres |
 | `DB_POOL_SIZE` | Connection pool size | 20 |
+
+### Cloudflare Worker Environment Variables
+
+When deploying to Cloudflare Workers, set variables via `wrangler.toml` or Wrangler secrets:
+
+```bash
+wrangler secret put DB_PASSWORD
+```
+
+## Deployment
+
+### Cloudflare Workers
+
+1. Install Wrangler: `npm install -g wrangler` or `deno install -g npm:wrangler`
+2. Authenticate: `wrangler login`
+3. Update `wrangler.toml` with your database connection details (or use secrets)
+4. Deploy: `deno task deploy`
+
+## Development
+
+### Prerequisites
+
+- [Deno](https://deno.land/) v2.x
+- A PostgreSQL instance with PGMQ extension
+
+### Running Locally
+
+```bash
+DB_HOST=localhost DB_PORT=5432 DB_USER=postgres DB_PASSWORD=postgres DB_NAME=postgres DB_POOL_SIZE=20 deno task dev
+```
+
+### Running Tests
+
+```bash
+DB_HOST=localhost DB_PORT=5432 DB_USER=postgres DB_PASSWORD=postgres DB_NAME=postgres DB_POOL_SIZE=20 deno task test
+```
 
 ## Performance Considerations
 
@@ -99,74 +173,9 @@ For detailed API documentation, visit http://localhost:8080/docs after starting 
 
 - Always use secure connections (HTTPS) in production
 - Change default credentials in production
-- Use environment variables or secrets management for sensitive configuration
+- Use environment variables or Wrangler secrets for sensitive configuration
 - Consider network isolation for the PostgreSQL instance
 - Regularly update to the latest version for security patches
-
-## Development
-
-1. Start a local PostgreSQL instance with pgmq:
-    ```bash
-    # Cleanup existing container and volumes
-    docker stop pgmq 2>/dev/null || true
-    docker rm pgmq 2>/dev/null || true
-    docker volume rm pgmq_data 2>/dev/null || true
-
-    # Start PGMQ
-    docker run -d --name pgmq \
-      -p 5432:5432 \
-      -e POSTGRES_USER=postgres \
-      -e POSTGRES_PASSWORD=postgres \
-      -e POSTGRES_DB=postgres \
-      -v pgmq_data:/var/lib/postgresql/data \
-      -v $(pwd)/init-pgmq.sql:/docker-entrypoint-initdb.d/init-pgmq.sql \
-      tembo.docker.scarf.sh/tembo/pg17-pgmq:latest
-    ```
-
-2. Run the development server:
-    ```bash
-    DB_HOST=localhost DB_PORT=5432 DB_USER=postgres DB_PASSWORD=postgres DB_NAME=postgres DB_POOL_SIZE=20 bun dev
-    ```
-
-3. Run the tests:
-    ```bash
-    DB_HOST=localhost DB_PORT=5432 DB_USER=postgres DB_PASSWORD=postgres DB_NAME=postgres DB_POOL_SIZE=20 bun test
-    ```
-
-## Manual Setup
-
-If you prefer to run the services manually instead of using Docker Compose:
-
-1. Start the PGMQ container:
-    ```bash
-    docker run -d --name pgmq \
-      -p 5432:5432 \
-      -e POSTGRES_USER=postgres \
-      -e POSTGRES_PASSWORD=postgres \
-      -e POSTGRES_DB=postgres \
-      -v $(pwd)/init-pgmq.sql:/docker-entrypoint-initdb.d/init-pgmq.sql \
-      tembo.docker.scarf.sh/tembo/pg17-pgmq:latest
-    ```
-
-2. Run the pgmq-rest container:
-    ```bash
-    docker run -d --name pgmq-rest \
-      -p 8080:8080 \
-      -e DB_HOST=pgmq \
-      -e DB_PORT=5432 \
-      -e DB_NAME=postgres \
-      -e DB_USER=postgres \
-      -e DB_PASSWORD=postgres \
-      --link pgmq:postgres \
-      eichenroth/pgmq-rest:latest
-    ```
-
-3. Cleanup:
-    ```bash
-    docker stop pgmq-rest pgmq
-    docker rm pgmq-rest pgmq
-    docker volume rm pgmq_data
-    ```
 
 ## Troubleshooting
 
@@ -193,5 +202,5 @@ This project is licensed under the MIT License.
 
 ## Acknowledgments
 
-- Built with [Elysia.js](https://elysiajs.com/)
+- Built with [Hono](https://hono.dev/)
 - Powered by [PGMQ](https://github.com/tembo-io/pgmq)
