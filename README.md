@@ -3,12 +3,11 @@
 > Because sometimes your messages need a queue, and your queues need a REST API.
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Docker Pulls](https://img.shields.io/docker/pulls/eichenroth/pgmq-rest)](https://hub.docker.com/r/eichenroth/pgmq-rest)
 [![Tests](https://github.com/eichenroth/pgmq-rest/actions/workflows/test.yml/badge.svg)](https://github.com/eichenroth/pgmq-rest/actions/workflows/test.yml)
 
 ## Overview
 
-pgmq-rest provides a REST API for [PGMQ](https://github.com/tembo-io/pgmq) (PostgreSQL Message Queue), making it easy to integrate message queues into your applications.
+pgmq-rest provides a REST API for [PGMQ](https://github.com/tembo-io/pgmq) (PostgreSQL Message Queue), making it easy to integrate message queues into your applications. It runs on Cloudflare Workers using the [Neon](https://neon.tech) serverless driver.
 
 ## Features
 
@@ -16,22 +15,47 @@ pgmq-rest provides a REST API for [PGMQ](https://github.com/tembo-io/pgmq) (Post
 - 🔄 Support for sending and receiving messages
 - 📦 Batch operations for better performance
 - 📊 Queue metrics and monitoring
-- 🐳 Docker and Docker Compose support
+- ☁️ Cloudflare Workers deployment via Wrangler
+- 🦕 Deno for local development
 - 📝 Swagger documentation included
 
 ## Quick Start
 
-The fastest way to get started is using Docker Compose:
+### Prerequisites
 
-```bash
-cd example
-docker-compose up -d
-```
+- [Deno](https://deno.land) v2+
+- A [Neon](https://neon.tech) PostgreSQL database with the `pgmq` extension enabled
 
-To stop the stack:
-```bash
-docker-compose down -v
-```
+### Setup
+
+1. Install dependencies:
+    ```bash
+    deno install
+    ```
+
+2. Initialize the pgmq extension on your Neon database:
+    ```sql
+    CREATE EXTENSION IF NOT EXISTS pgmq;
+    ```
+
+3. Run the development server:
+    ```bash
+    DATABASE_URL="postgresql://user:password@host/db" deno task dev
+    ```
+
+4. Visit `http://localhost:8080/docs` for the Swagger UI.
+
+### Deploy to Cloudflare Workers
+
+1. Set the `DATABASE_URL` secret:
+    ```bash
+    npx wrangler secret put DATABASE_URL
+    ```
+
+2. Deploy:
+    ```bash
+    deno task deploy
+    ```
 
 ## Usage Example
 
@@ -73,24 +97,32 @@ The API provides the following main endpoints:
 - `POST /api/v1/send_batch` - Send multiple messages to a queue
 - `POST /api/v1/read` - Read messages from a queue
 - `POST /api/v1/read_with_poll` - Read messages with polling
-- `GET /api/v1/metrics` - Get queue metrics
+- `POST /api/v1/pop` - Pop a message from a queue
+- `POST /api/v1/delete` - Delete a message
+- `POST /api/v1/delete_batch` - Delete multiple messages
+- `POST /api/v1/purge_queue` - Purge all messages from a queue
+- `POST /api/v1/archive` - Archive a message
+- `POST /api/v1/archive_batch` - Archive multiple messages
+- `POST /api/v1/create` - Create a queue
+- `POST /api/v1/create_unlogged` - Create an unlogged queue
+- `POST /api/v1/drop_queue` - Drop a queue
+- `POST /api/v1/set_vt` - Set visibility timeout
+- `POST /api/v1/list_queues` - List all queues
+- `POST /api/v1/metrics` - Get metrics for a queue
+- `POST /api/v1/metrics_all` - Get metrics for all queues
 
-For detailed API documentation, visit http://localhost:8080/docs after starting the service.
+For detailed API documentation, visit `/docs` after starting the service.
 
 ## Configuration
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DB_HOST` | PostgreSQL host | postgres |
-| `DB_PORT` | PostgreSQL port | 5432 |
-| `DB_NAME` | Database name | postgres |
-| `DB_USER` | Database user | postgres |
-| `DB_PASSWORD` | Database password | postgres |
-| `DB_POOL_SIZE` | Connection pool size | 20 |
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `DATABASE_URL` | Neon PostgreSQL connection string | Yes |
+| `PORT` | Server port (local dev only) | No (default: 8080) |
 
 ## Performance Considerations
 
-- **Connection Pooling**: Adjust `DB_POOL_SIZE` based on your application's concurrency needs
+- **Serverless**: Each request uses the Neon HTTP driver for stateless, low-latency queries
 - **Batch Operations**: Use `send_batch` for better performance when sending multiple messages
 - **Visibility Timeout**: Set appropriate visibility timeout when reading messages to prevent message loss
 - **Queue Size**: Monitor queue metrics to prevent queue overflow
@@ -98,74 +130,32 @@ For detailed API documentation, visit http://localhost:8080/docs after starting 
 ## Security
 
 - Always use secure connections (HTTPS) in production
-- Change default credentials in production
+- Store `DATABASE_URL` as a Cloudflare Workers secret
 - Use environment variables or secrets management for sensitive configuration
-- Consider network isolation for the PostgreSQL instance
 - Regularly update to the latest version for security patches
 
 ## Development
 
-1. Start a local PostgreSQL instance with pgmq:
-    ```bash
-    # Cleanup existing container and volumes
-    docker stop pgmq 2>/dev/null || true
-    docker rm pgmq 2>/dev/null || true
-    docker volume rm pgmq_data 2>/dev/null || true
+1. Install Deno v2+: https://deno.land
 
-    # Start PGMQ
-    docker run -d --name pgmq \
-      -p 5432:5432 \
-      -e POSTGRES_USER=postgres \
-      -e POSTGRES_PASSWORD=postgres \
-      -e POSTGRES_DB=postgres \
-      -v pgmq_data:/var/lib/postgresql/data \
-      -v $(pwd)/init-pgmq.sql:/docker-entrypoint-initdb.d/init-pgmq.sql \
-      tembo.docker.scarf.sh/tembo/pg17-pgmq:latest
+2. Install dependencies:
+    ```bash
+    deno install
     ```
 
-2. Run the development server:
+3. Run the development server:
     ```bash
-    DB_HOST=localhost DB_PORT=5432 DB_USER=postgres DB_PASSWORD=postgres DB_NAME=postgres DB_POOL_SIZE=20 bun dev
+    DATABASE_URL="postgresql://user:password@host/db" deno task dev
     ```
 
-3. Run the tests:
+4. Run the linter:
     ```bash
-    DB_HOST=localhost DB_PORT=5432 DB_USER=postgres DB_PASSWORD=postgres DB_NAME=postgres DB_POOL_SIZE=20 bun test
+    deno task lint
     ```
 
-## Manual Setup
-
-If you prefer to run the services manually instead of using Docker Compose:
-
-1. Start the PGMQ container:
+5. Run the tests (requires a `DATABASE_URL` pointing to a PostgreSQL database with pgmq):
     ```bash
-    docker run -d --name pgmq \
-      -p 5432:5432 \
-      -e POSTGRES_USER=postgres \
-      -e POSTGRES_PASSWORD=postgres \
-      -e POSTGRES_DB=postgres \
-      -v $(pwd)/init-pgmq.sql:/docker-entrypoint-initdb.d/init-pgmq.sql \
-      tembo.docker.scarf.sh/tembo/pg17-pgmq:latest
-    ```
-
-2. Run the pgmq-rest container:
-    ```bash
-    docker run -d --name pgmq-rest \
-      -p 8080:8080 \
-      -e DB_HOST=pgmq \
-      -e DB_PORT=5432 \
-      -e DB_NAME=postgres \
-      -e DB_USER=postgres \
-      -e DB_PASSWORD=postgres \
-      --link pgmq:postgres \
-      eichenroth/pgmq-rest:latest
-    ```
-
-3. Cleanup:
-    ```bash
-    docker stop pgmq-rest pgmq
-    docker rm pgmq-rest pgmq
-    docker volume rm pgmq_data
+    DATABASE_URL="postgresql://user:password@host/db" deno task test
     ```
 
 ## Troubleshooting
@@ -173,19 +163,18 @@ If you prefer to run the services manually instead of using Docker Compose:
 Common issues and solutions:
 
 1. **Connection Issues**
-   - Verify PostgreSQL is running and accessible
-   - Check network connectivity between services
-   - Verify credentials and permissions
+   - Verify your `DATABASE_URL` is correct
+   - Check that the Neon database is accessible
+   - Verify the pgmq extension is installed
 
 2. **Queue Operations Fail**
    - Check if the queue exists
    - Verify message format
    - Check PostgreSQL logs for errors
 
-3. **Performance Issues**
-   - Monitor queue metrics
-   - Check PostgreSQL performance
-   - Adjust connection pool size if needed
+3. **Deployment Issues**
+   - Ensure `DATABASE_URL` is set as a Cloudflare Workers secret
+   - Check wrangler logs: `npx wrangler tail`
 
 ## License
 
@@ -193,5 +182,8 @@ This project is licensed under the MIT License.
 
 ## Acknowledgments
 
-- Built with [Elysia.js](https://elysiajs.com/)
+- Built with [Hono](https://hono.dev/)
+- Database driver by [Neon](https://neon.tech)
 - Powered by [PGMQ](https://github.com/tembo-io/pgmq)
+- Deployed on [Cloudflare Workers](https://workers.cloudflare.com/)
+
