@@ -27,24 +27,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
 
-      - name: Build pgmq-rest Docker image
-        run: docker build -t pgmq-rest .
-
-      - name: Run pgmq-rest container
+      - name: Start pgmq-rest server
+        env:
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+          DB_NAME: postgres
+          DB_POOL_SIZE: 20
         run: |
-          docker run -d \
-            --name pgmq-rest \
-            --network host \
-            -e DB_HOST=localhost \
-            -e DB_PORT=5432 \
-            -e DB_USER=postgres \
-            -e DB_PASSWORD=postgres \
-            -e DB_NAME=postgres \
-            -e DB_POOL_SIZE=20 \
-            pgmq-rest
+          deno run --allow-env --allow-net src/index.ts &
+          echo "Server PID: $!"
 
       - name: Wait for pgmq-rest to be ready
         run: |
@@ -59,21 +57,13 @@ jobs:
           echo "pgmq-rest failed to start"
           exit 1
 
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: latest
-
-      - name: Install dependencies
-        run: bun install
-
       - name: Run tests
         env:
-          # Database connection for direct database access in tests
           DB_HOST: localhost
           DB_PORT: 5432
           DB_USER: postgres
           DB_PASSWORD: postgres
           DB_NAME: postgres
           DB_POOL_SIZE: 20
-        run: bun test
+          API_URL: http://localhost:8080/api/v1
+        run: deno test --allow-env --allow-net src/index.test.ts

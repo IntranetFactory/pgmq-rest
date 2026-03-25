@@ -1,22 +1,35 @@
 import { Pool, PoolClient } from "pg";
 
-const getEnv = (name: string): string => {
-  const value = Bun.env[name];
-  if (!value) throw new Error(`ENV variable ${name} is not set!`);
-  return value;
+export type DbEnv = {
+  DB_HOST: string;
+  DB_PORT: string;
+  DB_NAME: string;
+  DB_USER: string;
+  DB_PASSWORD: string;
+  DB_POOL_SIZE: string;
 };
 
-const db = new Pool({
-  host: getEnv("DB_HOST"),
-  port: parseInt(getEnv("DB_PORT"), 10),
-  database: getEnv("DB_NAME"),
-  user: getEnv("DB_USER"),
-  password: getEnv("DB_PASSWORD"),
-  max: parseInt(getEnv("DB_POOL_SIZE"), 10),
-});
+// Module-level singleton is safe in JavaScript's single-threaded event loop.
+// In a Cloudflare Worker, the Worker isolate reuses this across requests for the same env.
+let cachedPool: Pool | null = null;
 
-export const withClient = async <T>(fn: (client: PoolClient) => Promise<T>): Promise<T> => {
-  const client = await db.connect();
+const getPool = (env: DbEnv): Pool => {
+  if (!cachedPool) {
+    cachedPool = new Pool({
+      host: env.DB_HOST,
+      port: parseInt(env.DB_PORT, 10),
+      database: env.DB_NAME,
+      user: env.DB_USER,
+      password: env.DB_PASSWORD,
+      max: parseInt(env.DB_POOL_SIZE, 10),
+    });
+  }
+  return cachedPool;
+};
+
+export const withClient = async <T>(env: DbEnv, fn: (client: PoolClient) => Promise<T>): Promise<T> => {
+  const pool = getPool(env);
+  const client = await pool.connect();
   try {
     return await fn(client);
   } finally {

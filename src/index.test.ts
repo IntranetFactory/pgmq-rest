@@ -1,19 +1,27 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { randomUUID } from "crypto";
-import { clearTimeout, setTimeout } from "timers";
+import { afterEach, beforeAll, beforeEach, describe, test } from "jsr:@std/testing@^1/bdd";
+import { expect } from "jsr:@std/expect@^1";
 
-import { withClient } from "./db";
+import { DbEnv, withClient } from "./db.ts";
 
-const API_URL = Bun.env.API_URL || "http://localhost:8080/api/v1";
+const getTestEnv = (): DbEnv => ({
+  DB_HOST: Deno.env.get("DB_HOST") ?? "localhost",
+  DB_PORT: Deno.env.get("DB_PORT") ?? "5432",
+  DB_NAME: Deno.env.get("DB_NAME") ?? "postgres",
+  DB_USER: Deno.env.get("DB_USER") ?? "postgres",
+  DB_PASSWORD: Deno.env.get("DB_PASSWORD") ?? "postgres",
+  DB_POOL_SIZE: Deno.env.get("DB_POOL_SIZE") ?? "20",
+});
 
-const uniqueName = (): string => `test_queue_${randomUUID().replace(/-/g, "")}`;
+const API_URL = Deno.env.get("API_URL") ?? "http://localhost:8080/api/v1";
 
-const apiRequest = async (endpoint: string, body: any, timeout = 5000): Promise<any> => {
+const uniqueName = (): string => `test_queue_${crypto.randomUUID().replace(/-/g, "")}`;
+
+const apiRequest = async (endpoint: string, body: unknown, timeout = 5000): Promise<unknown> => {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
   try {
-    const response = await Bun.fetch(`${API_URL}${endpoint}`, {
+    const response = await fetch(`${API_URL}${endpoint}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -31,7 +39,7 @@ const apiRequest = async (endpoint: string, body: any, timeout = 5000): Promise<
 
 describe("pgmq-rest", () => {
   beforeAll(async () => {
-    await withClient(async (client) => {
+    await withClient(getTestEnv(), async (client) => {
       await client.query("DROP EXTENSION IF EXISTS pgmq;");
       await client.query("CREATE EXTENSION IF NOT EXISTS pgmq;");
     });
@@ -43,19 +51,19 @@ describe("pgmq-rest", () => {
 
       await apiRequest("/create", { queue_name: queueName });
 
-      const queues = await apiRequest("/list_queues", {});
+      const queues = await apiRequest("/list_queues", {}) as unknown[][];
 
-      const foundQueue = queues.find((q: any) => q[0] === queueName);
+      const foundQueue = queues.find((q) => q[0] === queueName);
       expect(foundQueue).toBeDefined();
-      expect(foundQueue[0]).toBe(queueName);
-      expect(foundQueue[1]).toBe(false); // is_partitioned
-      expect(foundQueue[2]).toBe(false); // is_unlogged
+      expect(foundQueue![0]).toBe(queueName);
+      expect(foundQueue![1]).toBe(false); // is_partitioned
+      expect(foundQueue![2]).toBe(false); // is_unlogged
 
       const dropResult = await apiRequest("/drop_queue", { queue_name: queueName });
       expect(dropResult).toBe(true);
 
-      const queuesAfterDrop = await apiRequest("/list_queues", {});
-      const queueAfterDrop = queuesAfterDrop.find((q: any) => q[0] === queueName);
+      const queuesAfterDrop = await apiRequest("/list_queues", {}) as unknown[][];
+      const queueAfterDrop = queuesAfterDrop.find((q) => q[0] === queueName);
       expect(queueAfterDrop).toBeUndefined();
     });
 
@@ -64,10 +72,10 @@ describe("pgmq-rest", () => {
 
       await apiRequest("/create_unlogged", { queue_name: queueName });
 
-      const queues = await apiRequest("/list_queues", {});
-      const foundQueue = queues.find((q: any) => q[0] === queueName);
+      const queues = await apiRequest("/list_queues", {}) as unknown[][];
+      const foundQueue = queues.find((q) => q[0] === queueName);
       expect(foundQueue).toBeDefined();
-      expect(foundQueue[2]).toBe(true); // is_unlogged
+      expect(foundQueue![2]).toBe(true); // is_unlogged
 
       await apiRequest("/drop_queue", { queue_name: queueName });
     });
@@ -88,7 +96,7 @@ describe("pgmq-rest", () => {
     test("Send a message", async () => {
       const testMessage = { test: "data", value: 123 };
 
-      const msgIds = await apiRequest("/send", { queue_name: queueName, msg: testMessage });
+      const msgIds = await apiRequest("/send", { queue_name: queueName, msg: testMessage }) as number[];
 
       expect(msgIds).toBeInstanceOf(Array);
       expect(msgIds.length).toBe(1);
@@ -98,7 +106,7 @@ describe("pgmq-rest", () => {
     test("Send a message with delay", async () => {
       const testMessage = { test: "delayed" };
 
-      const msgIds = await apiRequest("/send", { queue_name: queueName, msg: testMessage, delay: 1 });
+      const msgIds = await apiRequest("/send", { queue_name: queueName, msg: testMessage, delay: 1 }) as number[];
 
       expect(msgIds).toBeInstanceOf(Array);
       expect(msgIds.length).toBe(1);
@@ -107,7 +115,7 @@ describe("pgmq-rest", () => {
     test("Send batch messages", async () => {
       const testMessages = [{ test: "batch1" }, { test: "batch2" }, { test: "batch3" }];
 
-      const msgIds = await apiRequest("/send_batch", { queue_name: queueName, msgs: testMessages });
+      const msgIds = await apiRequest("/send_batch", { queue_name: queueName, msgs: testMessages }) as number[];
 
       expect(msgIds).toBeInstanceOf(Array);
       expect(msgIds.length).toBe(3);
@@ -129,14 +137,14 @@ describe("pgmq-rest", () => {
     test("Read messages", async () => {
       const testMessage = { test: "read_test" };
 
-      const msgIds = await apiRequest("/send", { queue_name: queueName, msg: testMessage });
+      const msgIds = await apiRequest("/send", { queue_name: queueName, msg: testMessage }) as number[];
 
-      const messages = await apiRequest("/read", { queue_name: queueName, vt: 30, qty: 5 });
+      const messages = await apiRequest("/read", { queue_name: queueName, vt: 30, qty: 5 }) as unknown[][];
 
       expect(messages).toBeInstanceOf(Array);
       expect(messages.length).toBe(1);
-      expect(messages[0][0]).toBe(msgIds[0]);
-      expect(messages[0][4]).toEqual(testMessage);
+      expect(messages[0]![0]).toBe(msgIds[0]);
+      expect(messages[0]![4]).toEqual(testMessage);
     });
 
     test("Read messages with polling", async () => {
@@ -146,11 +154,17 @@ describe("pgmq-rest", () => {
         await apiRequest("/send", { queue_name: queueName, msg: testMessage });
       }, 100);
 
-      const messages = await apiRequest("/read_with_poll", { queue_name: queueName, vt: 30, qty: 5, max_poll_seconds: 2, poll_interval_ms: 100 });
+      const messages = await apiRequest("/read_with_poll", {
+        queue_name: queueName,
+        vt: 30,
+        qty: 5,
+        max_poll_seconds: 2,
+        poll_interval_ms: 100,
+      }) as unknown[][];
 
       expect(messages).toBeInstanceOf(Array);
       expect(messages.length).toBe(1);
-      expect(messages[0][4]).toEqual(testMessage);
+      expect(messages[0]![4]).toEqual(testMessage);
     });
 
     test("Pop message", async () => {
@@ -158,11 +172,11 @@ describe("pgmq-rest", () => {
 
       await apiRequest("/send", { queue_name: queueName, msg: testMessage });
 
-      const messages = await apiRequest("/pop", { queue_name: queueName });
+      const messages = await apiRequest("/pop", { queue_name: queueName }) as unknown[][];
 
       expect(messages).toBeInstanceOf(Array);
       expect(messages.length).toBe(1);
-      expect(messages[0][4]).toEqual(testMessage);
+      expect(messages[0]![4]).toEqual(testMessage);
     });
   });
 
@@ -181,13 +195,13 @@ describe("pgmq-rest", () => {
     test("Delete a message", async () => {
       const testMessage = { test: "delete_test" };
 
-      const msgIds = await apiRequest("/send", { queue_name: queueName, msg: testMessage });
+      const msgIds = await apiRequest("/send", { queue_name: queueName, msg: testMessage }) as number[];
 
       const deleteResult = await apiRequest("/delete", { queue_name: queueName, msg_id: msgIds[0] });
 
       expect(deleteResult).toBe(true);
 
-      const messages = await apiRequest("/read", { queue_name: queueName, vt: 30, qty: 5 });
+      const messages = await apiRequest("/read", { queue_name: queueName, vt: 30, qty: 5 }) as unknown[][];
 
       expect(messages.length).toBe(0);
     });
@@ -195,14 +209,14 @@ describe("pgmq-rest", () => {
     test("Delete batch messages", async () => {
       const testMessages = [{ test: "batch_delete1" }, { test: "batch_delete2" }, { test: "batch_delete3" }];
 
-      const msgIds = await apiRequest("/send_batch", { queue_name: queueName, msgs: testMessages });
+      const msgIds = await apiRequest("/send_batch", { queue_name: queueName, msgs: testMessages }) as number[];
 
-      const deletedIds = await apiRequest("/delete_batch", { queue_name: queueName, msg_ids: msgIds });
+      const deletedIds = await apiRequest("/delete_batch", { queue_name: queueName, msg_ids: msgIds }) as number[];
 
       expect(deletedIds).toBeInstanceOf(Array);
       expect(deletedIds.length).toBe(3);
 
-      const messages = await apiRequest("/read", { queue_name: queueName, vt: 30, qty: 5 });
+      const messages = await apiRequest("/read", { queue_name: queueName, vt: 30, qty: 5 }) as unknown[][];
 
       expect(messages.length).toBe(0);
     });
@@ -216,7 +230,7 @@ describe("pgmq-rest", () => {
 
       expect(purgeCount).toBe(3);
 
-      const messages = await apiRequest("/read", { queue_name: queueName, vt: 30, qty: 5 });
+      const messages = await apiRequest("/read", { queue_name: queueName, vt: 30, qty: 5 }) as unknown[][];
 
       expect(messages.length).toBe(0);
     });
@@ -224,13 +238,13 @@ describe("pgmq-rest", () => {
     test("Archive a message", async () => {
       const testMessage = { test: "archive_test" };
 
-      const msgIds = await apiRequest("/send", { queue_name: queueName, msg: testMessage });
+      const msgIds = await apiRequest("/send", { queue_name: queueName, msg: testMessage }) as number[];
 
       const archiveResult = await apiRequest("/archive", { queue_name: queueName, msg_id: msgIds[0] });
 
       expect(archiveResult).toBe(true);
 
-      const messages = await apiRequest("/read", { queue_name: queueName, vt: 30, qty: 5 });
+      const messages = await apiRequest("/read", { queue_name: queueName, vt: 30, qty: 5 }) as unknown[][];
 
       expect(messages.length).toBe(0);
     });
@@ -238,14 +252,14 @@ describe("pgmq-rest", () => {
     test("Archive batch messages", async () => {
       const testMessages = [{ test: "batch_archive1" }, { test: "batch_archive2" }, { test: "batch_archive3" }];
 
-      const msgIds = await apiRequest("/send_batch", { queue_name: queueName, msgs: testMessages });
+      const msgIds = await apiRequest("/send_batch", { queue_name: queueName, msgs: testMessages }) as number[];
 
-      const archivedIds = await apiRequest("/archive_batch", { queue_name: queueName, msg_ids: msgIds });
+      const archivedIds = await apiRequest("/archive_batch", { queue_name: queueName, msg_ids: msgIds }) as number[];
 
       expect(archivedIds).toBeInstanceOf(Array);
       expect(archivedIds.length).toBe(3);
 
-      const messages = await apiRequest("/read", { queue_name: queueName, vt: 30, qty: 5 });
+      const messages = await apiRequest("/read", { queue_name: queueName, vt: 30, qty: 5 }) as unknown[][];
 
       expect(messages.length).toBe(0);
     });
@@ -266,43 +280,43 @@ describe("pgmq-rest", () => {
     test("Set visibility timeout", async () => {
       const testMessage = { test: "vt_test" };
 
-      const msgIds = await apiRequest("/send", { queue_name: queueName, msg: testMessage });
+      const msgIds = await apiRequest("/send", { queue_name: queueName, msg: testMessage }) as number[];
 
-      const initialMessages = await apiRequest("/read", { queue_name: queueName, vt: 30, qty: 1 });
+      const initialMessages = await apiRequest("/read", { queue_name: queueName, vt: 30, qty: 1 }) as unknown[][];
 
-      const initialVt = initialMessages[0][3]; // vt
+      const initialVt = initialMessages[0]![3]; // vt
 
-      const vtResult = await apiRequest("/set_vt", { queue_name: queueName, msg_id: msgIds[0], vt_offset: 60 });
+      const vtResult = await apiRequest("/set_vt", { queue_name: queueName, msg_id: msgIds[0], vt_offset: 60 }) as unknown[][];
 
       expect(vtResult).toBeInstanceOf(Array);
       expect(vtResult.length).toBe(1);
 
-      const newVt = vtResult[0][3];
+      const newVt = vtResult[0]![3];
       expect(newVt).not.toEqual(initialVt);
     });
 
     test("Get metrics for a queue", async () => {
       await apiRequest("/send_batch", { queue_name: queueName, msgs: [{ test: 1 }, { test: 2 }, { test: 3 }] });
 
-      const metrics = await apiRequest("/metrics", { queue_name: queueName });
+      const metrics = await apiRequest("/metrics", { queue_name: queueName }) as unknown[][];
 
       expect(metrics).toBeInstanceOf(Array);
       expect(metrics.length).toBe(1);
-      expect(metrics[0][0]).toBe(queueName); // queue_name
-      expect(metrics[0][1]).toBe(3); // queue_length
-      expect(metrics[0][4]).toBe(3); // total_messages
+      expect(metrics[0]![0]).toBe(queueName); // queue_name
+      expect(metrics[0]![1]).toBe(3); // queue_length
+      expect(metrics[0]![4]).toBe(3); // total_messages
     });
 
     test("Get metrics for all queues", async () => {
       await apiRequest("/send", { queue_name: queueName, msg: { test: "metrics_all" } });
 
-      const allMetrics = await apiRequest("/metrics_all", {});
+      const allMetrics = await apiRequest("/metrics_all", {}) as unknown[][];
 
       expect(allMetrics).toBeInstanceOf(Array);
 
-      const queueMetrics = allMetrics.find((m: any) => m[0] === queueName);
+      const queueMetrics = allMetrics.find((m) => m[0] === queueName);
       expect(queueMetrics).toBeDefined();
-      expect(queueMetrics[1]).toBe(1); // queue_length
+      expect(queueMetrics![1]).toBe(1); // queue_length
     });
   });
 });

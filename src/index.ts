@@ -1,374 +1,324 @@
-import swagger from "@elysiajs/swagger";
-import { Elysia, t } from "elysia";
+import { swaggerUI } from "@hono/swagger-ui";
+import { Hono } from "hono";
 
-import { withClient } from "./db";
-import { BooleanRecord, IdRecord, MessageRecord, MetricRecord, QueueRecord } from "./types";
+import { DbEnv, withClient } from "./db.ts";
+import { BooleanRecord, IdRecord, MessageRecord, MetricRecord, QueueRecord } from "./types.ts";
 
-const MessageRecordSchema = t.Tuple([t.Number(), t.Number(), t.Date(), t.Date(), t.Any(), t.Any()]);
-const QueueRecordSchema = t.Tuple([t.String(), t.Boolean(), t.Boolean(), t.Date()]);
-const MetricRecordSchema = t.Tuple([t.String(), t.Number(), t.Nullable(t.Number()), t.Nullable(t.Number()), t.Number(), t.Date()]);
+type Bindings = DbEnv;
 
-const app = new Elysia()
-  .use(swagger({ path: "/docs", documentation: { info: { title: "pgmq-rest documentation", version: "1.0.0" } } }))
-  .get("/", ({ redirect }) => redirect("/docs"))
+const app = new Hono<{ Bindings: Bindings }>();
 
-  // --- SENDING MESSAGES ---
+// Inject env vars from Deno environment when running locally (not as a CF Worker)
+app.use("*", async (c, next) => {
+  if (typeof Deno !== "undefined" && !c.env.DB_HOST) {
+    const env = c.env as Record<string, string>;
+    env["DB_HOST"] = Deno.env.get("DB_HOST") ?? "localhost";
+    env["DB_PORT"] = Deno.env.get("DB_PORT") ?? "5432";
+    env["DB_NAME"] = Deno.env.get("DB_NAME") ?? "postgres";
+    env["DB_USER"] = Deno.env.get("DB_USER") ?? "postgres";
+    env["DB_PASSWORD"] = Deno.env.get("DB_PASSWORD") ?? "postgres";
+    env["DB_POOL_SIZE"] = Deno.env.get("DB_POOL_SIZE") ?? "20";
+  }
+  await next();
+});
 
-  // pgmq.send (queue_name text, msg jsonb, delay integer DEFAULT 0)
-  // RETURNS SETOF bigint
+app.get("/", (c) => c.redirect("/docs"));
 
-  .post(
-    "/api/v1/send",
-    async ({ body: { queue_name, msg, delay = 0 } }) => {
-      return await withClient(async (client) => {
-        const result = await client.query<IdRecord>(
-          {
-            rowMode: "array",
-            text: "SELECT pgmq.send($1::text, $2::jsonb, $3::integer)",
-            name: "send",
-          },
-          [queue_name, msg, delay],
-        );
-        return result.rows.map(([id]) => Number(id));
-      });
+app.get("/docs", swaggerUI({ url: "/openapi.json" }));
+
+app.get("/openapi.json", (c) =>
+  c.json({
+    openapi: "3.0.0",
+    info: { title: "pgmq-rest documentation", version: "1.0.0" },
+    paths: {
+      "/api/v1/send": { post: { summary: "Send a message", tags: ["Sending Messages"], requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { queue_name: { type: "string" }, msg: {}, delay: { type: "integer" } }, required: ["queue_name", "msg"] } } } }, responses: { "200": { description: "Array of message IDs" } } } },
+      "/api/v1/send_batch": { post: { summary: "Send multiple messages", tags: ["Sending Messages"], requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { queue_name: { type: "string" }, msgs: { type: "array" }, delay: { type: "integer" } }, required: ["queue_name", "msgs"] } } } }, responses: { "200": { description: "Array of message IDs" } } } },
+      "/api/v1/read": { post: { summary: "Read messages from a queue", tags: ["Reading Messages"], requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { queue_name: { type: "string" }, vt: { type: "integer" }, qty: { type: "integer" }, conditional: {} }, required: ["queue_name", "vt", "qty"] } } } }, responses: { "200": { description: "Array of message records" } } } },
+      "/api/v1/read_with_poll": { post: { summary: "Read messages with polling", tags: ["Reading Messages"], requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { queue_name: { type: "string" }, vt: { type: "integer" }, qty: { type: "integer" }, max_poll_seconds: { type: "integer" }, poll_interval_ms: { type: "integer" }, conditional: {} }, required: ["queue_name", "vt", "qty"] } } } }, responses: { "200": { description: "Array of message records" } } } },
+      "/api/v1/pop": { post: { summary: "Pop a message", tags: ["Reading Messages"], requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { queue_name: { type: "string" } }, required: ["queue_name"] } } } }, responses: { "200": { description: "Array of message records" } } } },
+      "/api/v1/delete": { post: { summary: "Delete a message", tags: ["Deleting Messages"], requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { queue_name: { type: "string" }, msg_id: { type: "number" } }, required: ["queue_name", "msg_id"] } } } }, responses: { "200": { description: "Boolean result" } } } },
+      "/api/v1/delete_batch": { post: { summary: "Delete multiple messages", tags: ["Deleting Messages"], requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { queue_name: { type: "string" }, msg_ids: { type: "array", items: { type: "number" } } }, required: ["queue_name", "msg_ids"] } } } }, responses: { "200": { description: "Array of deleted message IDs" } } } },
+      "/api/v1/purge_queue": { post: { summary: "Purge all messages from a queue", tags: ["Deleting Messages"], requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { queue_name: { type: "string" } }, required: ["queue_name"] } } } }, responses: { "200": { description: "Number of purged messages" } } } },
+      "/api/v1/archive": { post: { summary: "Archive a message", tags: ["Deleting Messages"], requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { queue_name: { type: "string" }, msg_id: { type: "number" } }, required: ["queue_name", "msg_id"] } } } }, responses: { "200": { description: "Boolean result" } } } },
+      "/api/v1/archive_batch": { post: { summary: "Archive multiple messages", tags: ["Deleting Messages"], requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { queue_name: { type: "string" }, msg_ids: { type: "array", items: { type: "number" } } }, required: ["queue_name", "msg_ids"] } } } }, responses: { "200": { description: "Array of archived message IDs" } } } },
+      "/api/v1/create": { post: { summary: "Create a queue", tags: ["Queue Management"], requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { queue_name: { type: "string" } }, required: ["queue_name"] } } } }, responses: { "200": { description: "Success" } } } },
+      "/api/v1/create_unlogged": { post: { summary: "Create an unlogged queue", tags: ["Queue Management"], requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { queue_name: { type: "string" } }, required: ["queue_name"] } } } }, responses: { "200": { description: "Success" } } } },
+      "/api/v1/drop_queue": { post: { summary: "Drop a queue", tags: ["Queue Management"], requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { queue_name: { type: "string" } }, required: ["queue_name"] } } } }, responses: { "200": { description: "Boolean result" } } } },
+      "/api/v1/set_vt": { post: { summary: "Set message visibility timeout", tags: ["Utilities"], requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { queue_name: { type: "string" }, msg_id: { type: "number" }, vt_offset: { type: "number" } }, required: ["queue_name", "msg_id", "vt_offset"] } } } }, responses: { "200": { description: "Updated message record" } } } },
+      "/api/v1/list_queues": { post: { summary: "List all queues", tags: ["Utilities"], responses: { "200": { description: "Array of queue records" } } } },
+      "/api/v1/metrics": { post: { summary: "Get metrics for a queue", tags: ["Utilities"], requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { queue_name: { type: "string" } }, required: ["queue_name"] } } } }, responses: { "200": { description: "Array of metric records" } } } },
+      "/api/v1/metrics_all": { post: { summary: "Get metrics for all queues", tags: ["Utilities"], responses: { "200": { description: "Array of metric records" } } } },
     },
-    {
-      body: t.Object({ queue_name: t.String(), msg: t.Any(), delay: t.Optional(t.Integer()) }),
-      response: t.Array(t.Number()),
-      tags: ["Sending Messages"],
-    },
-  )
+  }),
+);
 
-  // pgmq.send_batch (queue_name text, msgs jsonb[], delay integer DEFAULT 0)
-  // RETURNS SETOF bigint
+// --- SENDING MESSAGES ---
 
-  .post(
-    "/api/v1/send_batch",
-    async ({ body: { queue_name, msgs, delay = 0 } }) => {
-      return await withClient(async (client) => {
-        const result = await client.query<IdRecord>(
-          { rowMode: "array", text: "SELECT pgmq.send_batch($1::text, $2::jsonb[], $3::integer)", name: "send_batch" },
-          [queue_name, msgs, delay],
-        );
-        return result.rows.map(([id]) => Number(id));
-      });
-    },
-    {
-      body: t.Object({ queue_name: t.String(), msgs: t.Array(t.Any()), delay: t.Optional(t.Integer()) }),
-      response: t.Array(t.Number()),
-      tags: ["Sending Messages"],
-    },
-  )
+// pgmq.send (queue_name text, msg jsonb, delay integer DEFAULT 0)
+// RETURNS SETOF bigint
 
-  // --- READING MESSAGES ---
+app.post("/api/v1/send", async (c) => {
+  const { queue_name, msg, delay = 0 } = await c.req.json<{ queue_name: string; msg: unknown; delay?: number }>();
+  const result = await withClient(c.env, async (client) => {
+    const r = await client.query<IdRecord>(
+      { rowMode: "array", text: "SELECT pgmq.send($1::text, $2::jsonb, $3::integer)", name: "send" },
+      [queue_name, msg, delay],
+    );
+    return r.rows.map(([id]: IdRecord) => Number(id));
+  });
+  return c.json(result);
+});
 
-  // pgmq.read (queue_name text, vt integer, qty integer, conditional jsonb DEFAULT '{}')
-  // RETURNS SETOF pgmq.message_record
+// pgmq.send_batch (queue_name text, msgs jsonb[], delay integer DEFAULT 0)
+// RETURNS SETOF bigint
 
-  .post(
-    "/api/v1/read",
-    async ({ body: { queue_name, vt, qty, conditional = {} } }) => {
-      return await withClient(async (client) => {
-        const result = await client.query<MessageRecord>(
-          { rowMode: "array", text: "SELECT * FROM pgmq.read($1::text, $2::integer, $3::integer, $4::jsonb)", name: "read" },
-          [queue_name, vt, qty, conditional],
-        );
-        return result.rows.map((row) => [Number(row[0]), row[1], row[2], row[3], row[4], row[5]]);
-      });
-    },
-    {
-      body: t.Object({ queue_name: t.String(), vt: t.Integer(), qty: t.Integer(), conditional: t.Optional(t.Any()) }),
-      response: t.Array(MessageRecordSchema),
-      tags: ["Reading Messages"],
-    },
-  )
+app.post("/api/v1/send_batch", async (c) => {
+  const { queue_name, msgs, delay = 0 } = await c.req.json<{ queue_name: string; msgs: unknown[]; delay?: number }>();
+  const result = await withClient(c.env, async (client) => {
+    const r = await client.query<IdRecord>(
+      { rowMode: "array", text: "SELECT pgmq.send_batch($1::text, $2::jsonb[], $3::integer)", name: "send_batch" },
+      [queue_name, msgs, delay],
+    );
+    return r.rows.map(([id]: IdRecord) => Number(id));
+  });
+  return c.json(result);
+});
 
-  // pgmq.read_with_poll (queue_name text, vt integer, qty integer, max_poll_seconds integer DEFAULT 5, poll_interval_ms integer DEFAULT 100, conditional jsonb DEFAULT '{}')
-  // RETURNS SETOF pgmq.message_record
+// --- READING MESSAGES ---
 
-  .post(
-    "/api/v1/read_with_poll",
-    async ({ body: { queue_name, vt, qty, max_poll_seconds = 5, poll_interval_ms = 100, conditional = {} } }) => {
-      return await withClient(async (client) => {
-        const result = await client.query<MessageRecord>(
-          {
-            rowMode: "array",
-            text: "SELECT * FROM pgmq.read_with_poll($1::text, $2::integer, $3::integer, $4::integer, $5::integer, $6::jsonb)",
-            name: "read_with_poll",
-          },
-          [queue_name, vt, qty, max_poll_seconds, poll_interval_ms, conditional],
-        );
-        return result.rows.map((row) => [Number(row[0]), row[1], row[2], row[3], row[4], row[5]]);
-      });
-    },
-    {
-      body: t.Object({
-        queue_name: t.String(),
-        vt: t.Integer(),
-        qty: t.Integer(),
-        max_poll_seconds: t.Optional(t.Integer()),
-        poll_interval_ms: t.Optional(t.Integer()),
-        conditional: t.Optional(t.Any()),
-      }),
-      response: t.Array(MessageRecordSchema),
-      tags: ["Reading Messages"],
-    },
-  )
+// pgmq.read (queue_name text, vt integer, qty integer, conditional jsonb DEFAULT '{}')
+// RETURNS SETOF pgmq.message_record
 
-  // pgmq.pop (queue_name text)
-  // RETURNS SETOF pgmq.message_record
+app.post("/api/v1/read", async (c) => {
+  const { queue_name, vt, qty, conditional = {} } = await c.req.json<{
+    queue_name: string;
+    vt: number;
+    qty: number;
+    conditional?: unknown;
+  }>();
+  const result = await withClient(c.env, async (client) => {
+    const r = await client.query<MessageRecord>(
+      { rowMode: "array", text: "SELECT * FROM pgmq.read($1::text, $2::integer, $3::integer, $4::jsonb)", name: "read" },
+      [queue_name, vt, qty, conditional],
+    );
+    return r.rows.map((row: MessageRecord) => [Number(row[0]), row[1], row[2], row[3], row[4], row[5]]);
+  });
+  return c.json(result);
+});
 
-  .post(
-    "/api/v1/pop",
-    async ({ body: { queue_name } }) => {
-      return await withClient(async (client) => {
-        const result = await client.query<MessageRecord>({ rowMode: "array", text: "SELECT * FROM pgmq.pop($1::text)", name: "pop" }, [queue_name]);
-        return result.rows.map((row) => [Number(row[0]), row[1], row[2], row[3], row[4], row[5]]);
-      });
-    },
-    { body: t.Object({ queue_name: t.String() }), response: t.Array(MessageRecordSchema), tags: ["Reading Messages"] },
-  )
+// pgmq.read_with_poll (queue_name text, vt integer, qty integer, max_poll_seconds integer DEFAULT 5, poll_interval_ms integer DEFAULT 100, conditional jsonb DEFAULT '{}')
+// RETURNS SETOF pgmq.message_record
 
-  // --- DELETING/ARCHIVING MESSAGES ---
+app.post("/api/v1/read_with_poll", async (c) => {
+  const { queue_name, vt, qty, max_poll_seconds = 5, poll_interval_ms = 100, conditional = {} } = await c.req.json<{
+    queue_name: string;
+    vt: number;
+    qty: number;
+    max_poll_seconds?: number;
+    poll_interval_ms?: number;
+    conditional?: unknown;
+  }>();
+  const result = await withClient(c.env, async (client) => {
+    const r = await client.query<MessageRecord>(
+      {
+        rowMode: "array",
+        text: "SELECT * FROM pgmq.read_with_poll($1::text, $2::integer, $3::integer, $4::integer, $5::integer, $6::jsonb)",
+        name: "read_with_poll",
+      },
+      [queue_name, vt, qty, max_poll_seconds, poll_interval_ms, conditional],
+    );
+    return r.rows.map((row: MessageRecord) => [Number(row[0]), row[1], row[2], row[3], row[4], row[5]]);
+  });
+  return c.json(result);
+});
 
-  // pgmq.delete (queue_name text, msg_id: bigint)
-  // RETURNS boolean
+// pgmq.pop (queue_name text)
+// RETURNS SETOF pgmq.message_record
 
-  .post(
-    "/api/v1/delete",
-    async ({ body: { queue_name, msg_id } }) => {
-      return await withClient(async (client) => {
-        const result = await client.query<BooleanRecord>(
-          {
-            rowMode: "array",
-            text: "SELECT pgmq.delete($1::text, $2::bigint)",
-            name: "delete",
-          },
-          [queue_name, msg_id],
-        );
-        return result.rows[0]?.[0] ?? false;
-      });
-    },
-    { body: t.Object({ queue_name: t.String(), msg_id: t.Number() }), response: t.Boolean(), tags: ["Deleting Messages"] },
-  )
+app.post("/api/v1/pop", async (c) => {
+  const { queue_name } = await c.req.json<{ queue_name: string }>();
+  const result = await withClient(c.env, async (client) => {
+    const r = await client.query<MessageRecord>({ rowMode: "array", text: "SELECT * FROM pgmq.pop($1::text)", name: "pop" }, [queue_name]);
+    return r.rows.map((row: MessageRecord) => [Number(row[0]), row[1], row[2], row[3], row[4], row[5]]);
+  });
+  return c.json(result);
+});
 
-  // pgmq.delete (queue_name text, msg_ids: bigint[])
-  // RETURNS SETOF bigint
+// --- DELETING/ARCHIVING MESSAGES ---
 
-  .post(
-    "/api/v1/delete_batch",
-    async ({ body: { queue_name, msg_ids } }) => {
-      return await withClient(async (client) => {
-        const result = await client.query<IdRecord>(
-          {
-            rowMode: "array",
-            text: "SELECT pgmq.delete($1::text, $2::bigint[])",
-            name: "delete_batch",
-          },
-          [queue_name, msg_ids],
-        );
-        return result.rows.map(([id]) => Number(id));
-      });
-    },
-    { body: t.Object({ queue_name: t.String(), msg_ids: t.Array(t.Number()) }), response: t.Array(t.Number()), tags: ["Deleting Messages"] },
-  )
+// pgmq.delete (queue_name text, msg_id: bigint)
+// RETURNS boolean
 
-  // purge_queue (queue_name text)
-  // RETURNS bigint
+app.post("/api/v1/delete", async (c) => {
+  const { queue_name, msg_id } = await c.req.json<{ queue_name: string; msg_id: number }>();
+  const result = await withClient(c.env, async (client) => {
+    const r = await client.query<BooleanRecord>(
+      { rowMode: "array", text: "SELECT pgmq.delete($1::text, $2::bigint)", name: "delete" },
+      [queue_name, msg_id],
+    );
+    return r.rows[0]?.[0] ?? false;
+  });
+  return c.json(result);
+});
 
-  .post(
-    "/api/v1/purge_queue",
-    async ({ body: { queue_name } }) => {
-      return await withClient(async (client) => {
-        const result = await client.query<IdRecord>(
-          {
-            rowMode: "array",
-            text: "SELECT pgmq.purge_queue($1::text)",
-            name: "purge_queue",
-          },
-          [queue_name],
-        );
-        return result.rows[0]?.[0] ? Number(result.rows[0][0]) : 0;
-      });
-    },
-    { body: t.Object({ queue_name: t.String() }), response: t.Number(), tags: ["Deleting Messages"] },
-  )
+// pgmq.delete (queue_name text, msg_ids: bigint[])
+// RETURNS SETOF bigint
 
-  // pgmq.archive (queue_name text, msg_id bigint)
-  // RETURNS boolean
+app.post("/api/v1/delete_batch", async (c) => {
+  const { queue_name, msg_ids } = await c.req.json<{ queue_name: string; msg_ids: number[] }>();
+  const result = await withClient(c.env, async (client) => {
+    const r = await client.query<IdRecord>(
+      { rowMode: "array", text: "SELECT pgmq.delete($1::text, $2::bigint[])", name: "delete_batch" },
+      [queue_name, msg_ids],
+    );
+    return r.rows.map(([id]: IdRecord) => Number(id));
+  });
+  return c.json(result);
+});
 
-  .post(
-    "/api/v1/archive",
-    async ({ body: { queue_name, msg_id } }) => {
-      return await withClient(async (client) => {
-        const result = await client.query<BooleanRecord>(
-          {
-            rowMode: "array",
-            text: "SELECT pgmq.archive($1::text, $2::bigint)",
-            name: "archive",
-          },
-          [queue_name, msg_id],
-        );
-        return result.rows[0]?.[0] ?? false;
-      });
-    },
-    { body: t.Object({ queue_name: t.String(), msg_id: t.Number() }), response: t.Boolean(), tags: ["Deleting Messages"] },
-  )
+// purge_queue (queue_name text)
+// RETURNS bigint
 
-  // pgmq.archive (queue_name text, msg_ids bigint[])
-  // RETURNS SETOF bigint
+app.post("/api/v1/purge_queue", async (c) => {
+  const { queue_name } = await c.req.json<{ queue_name: string }>();
+  const result = await withClient(c.env, async (client) => {
+    const r = await client.query<IdRecord>(
+      { rowMode: "array", text: "SELECT pgmq.purge_queue($1::text)", name: "purge_queue" },
+      [queue_name],
+    );
+    return r.rows[0]?.[0] ? Number(r.rows[0][0]) : 0;
+  });
+  return c.json(result);
+});
 
-  .post(
-    "/api/v1/archive_batch",
-    async ({ body: { queue_name, msg_ids } }) => {
-      return await withClient(async (client) => {
-        const result = await client.query<IdRecord>(
-          {
-            rowMode: "array",
-            text: "SELECT pgmq.archive($1::text, $2::bigint[])",
-            name: "archive_batch",
-          },
-          [queue_name, msg_ids],
-        );
-        return result.rows.map(([id]) => Number(id));
-      });
-    },
-    { body: t.Object({ queue_name: t.String(), msg_ids: t.Array(t.Number()) }), response: t.Array(t.Number()), tags: ["Deleting Messages"] },
-  )
+// pgmq.archive (queue_name text, msg_id bigint)
+// RETURNS boolean
 
-  // --- QUEUE MANAGEMENT ---
+app.post("/api/v1/archive", async (c) => {
+  const { queue_name, msg_id } = await c.req.json<{ queue_name: string; msg_id: number }>();
+  const result = await withClient(c.env, async (client) => {
+    const r = await client.query<BooleanRecord>(
+      { rowMode: "array", text: "SELECT pgmq.archive($1::text, $2::bigint)", name: "archive" },
+      [queue_name, msg_id],
+    );
+    return r.rows[0]?.[0] ?? false;
+  });
+  return c.json(result);
+});
 
-  // pgmq.create (queue_name text)
-  // RETURNS void
+// pgmq.archive (queue_name text, msg_ids bigint[])
+// RETURNS SETOF bigint
 
-  .post(
-    "/api/v1/create",
-    async ({ body: { queue_name } }) => {
-      return await withClient(async (client) => {
-        await client.query({ rowMode: "array", text: "SELECT pgmq.create($1::text)", name: "create" }, [queue_name]);
-      });
-    },
-    { body: t.Object({ queue_name: t.String() }), tags: ["Queue Management"] },
-  )
+app.post("/api/v1/archive_batch", async (c) => {
+  const { queue_name, msg_ids } = await c.req.json<{ queue_name: string; msg_ids: number[] }>();
+  const result = await withClient(c.env, async (client) => {
+    const r = await client.query<IdRecord>(
+      { rowMode: "array", text: "SELECT pgmq.archive($1::text, $2::bigint[])", name: "archive_batch" },
+      [queue_name, msg_ids],
+    );
+    return r.rows.map(([id]: IdRecord) => Number(id));
+  });
+  return c.json(result);
+});
 
-  // pgmq.create_partitioned (queue_name text, partition_interval text DEFAULT '10000'::text, retention_interval text DEFAULT '100000'::text)
-  // RETURNS void
+// --- QUEUE MANAGEMENT ---
 
-  // ...
-  // delayed for now because it is not supported out of the box by the pgmq docker image
+// pgmq.create (queue_name text)
+// RETURNS void
 
-  // pgmq.create_unlogged (queue_name text)
-  // RETURNS void
+app.post("/api/v1/create", async (c) => {
+  const { queue_name } = await c.req.json<{ queue_name: string }>();
+  await withClient(c.env, async (client) => {
+    await client.query({ rowMode: "array", text: "SELECT pgmq.create($1::text)", name: "create" }, [queue_name]);
+  });
+  return c.json(null);
+});
 
-  .post(
-    "/api/v1/create_unlogged",
-    async ({ body: { queue_name } }) => {
-      return await withClient(async (client) => {
-        await client.query({ rowMode: "array", text: "SELECT pgmq.create_unlogged($1::text)", name: "create_unlogged" }, [queue_name]);
-      });
-    },
-    { body: t.Object({ queue_name: t.String() }), tags: ["Queue Management"] },
-  )
+// pgmq.create_unlogged (queue_name text)
+// RETURNS void
 
-  // pgmq.detach_archive (queue_name text)
-  // RETURNS void
+app.post("/api/v1/create_unlogged", async (c) => {
+  const { queue_name } = await c.req.json<{ queue_name: string }>();
+  await withClient(c.env, async (client) => {
+    await client.query({ rowMode: "array", text: "SELECT pgmq.create_unlogged($1::text)", name: "create_unlogged" }, [queue_name]);
+  });
+  return c.json(null);
+});
 
-  // ...
-  // delayed for now because it is a weird feature
+// pgmq.drop_queue (queue_name text)
+// RETURNS boolean
 
-  // pgmq.drop_queue (queue_name text)
-  // RETURNS boolean
+app.post("/api/v1/drop_queue", async (c) => {
+  const { queue_name } = await c.req.json<{ queue_name: string }>();
+  const result = await withClient(c.env, async (client) => {
+    const r = await client.query<BooleanRecord>(
+      { rowMode: "array", text: "SELECT pgmq.drop_queue($1::text)", name: "drop_queue" },
+      [queue_name],
+    );
+    return r.rows[0]?.[0] ?? false;
+  });
+  return c.json(result);
+});
 
-  .post(
-    "/api/v1/drop_queue",
-    async ({ body: { queue_name } }) => {
-      return await withClient(async (client) => {
-        const result = await client.query<BooleanRecord>(
-          {
-            rowMode: "array",
-            text: "SELECT pgmq.drop_queue($1::text)",
-            name: "drop_queue",
-          },
-          [queue_name],
-        );
-        return result.rows[0]?.[0] ?? false;
-      });
-    },
-    { body: t.Object({ queue_name: t.String() }), response: t.Boolean(), tags: ["Queue Management"] },
-  )
+// --- UTILITIES ---
 
-  // --- UTILITIES ---
+// pgmq.set_vt (queue_name text, msg_id bigint, vt_offset integer)
+// RETURNS pgmq.message_record
 
-  // pgmq.set_vt (queue_name text, msg_id bigint, vt_offset integer)
-  // RETURNS pgmq.message_record
+app.post("/api/v1/set_vt", async (c) => {
+  const { queue_name, msg_id, vt_offset } = await c.req.json<{ queue_name: string; msg_id: number; vt_offset: number }>();
+  const result = await withClient(c.env, async (client) => {
+    const r = await client.query<MessageRecord>(
+      { rowMode: "array", text: "SELECT * FROM pgmq.set_vt($1::text, $2::bigint, $3::integer)", name: "set_vt" },
+      [queue_name, msg_id, vt_offset],
+    );
+    return r.rows.map((row: MessageRecord) => [Number(row[0]), row[1], row[2], row[3], row[4], row[5]]);
+  });
+  return c.json(result);
+});
 
-  .post(
-    "/api/v1/set_vt",
-    async ({ body: { queue_name, msg_id, vt_offset } }) => {
-      return await withClient(async (client) => {
-        const result = await client.query<MessageRecord>(
-          { rowMode: "array", text: "SELECT * FROM pgmq.set_vt($1::text, $2::bigint, $3::integer)", name: "set_vt" },
-          [queue_name, msg_id, vt_offset],
-        );
-        return result.rows.map((row) => [Number(row[0]), row[1], row[2], row[3], row[4], row[5]]);
-      });
-    },
-    {
-      body: t.Object({ queue_name: t.String(), msg_id: t.Number(), vt_offset: t.Number() }),
-      response: t.Array(MessageRecordSchema),
-      tags: ["Utilities"],
-    },
-  )
+// pgmq.list_queues ()
+// RETURNS TABLE(queue_name text, is_partitioned boolean, is_unlogged boolean, created_at timestamp with time zone)
 
-  // pgmq.list_queues ()
-  // RETURNS TABLE(queue_name text, is_partitioned boolean, is_unlogged boolean, created_at timestamp with time zone)
+app.post("/api/v1/list_queues", async (c) => {
+  const result = await withClient(c.env, async (client) => {
+    const r = await client.query<QueueRecord>({ rowMode: "array", text: "SELECT * FROM pgmq.list_queues()", name: "list_queues" });
+    return r.rows;
+  });
+  return c.json(result);
+});
 
-  .post(
-    "/api/v1/list_queues",
-    async () => {
-      return await withClient(async (client) => {
-        const result = await client.query<QueueRecord>({ rowMode: "array", text: "SELECT * FROM pgmq.list_queues()", name: "list_queues" });
-        return result.rows;
-      });
-    },
-    { response: t.Array(QueueRecordSchema), tags: ["Utilities"] },
-  )
+// pgmq.metrics (queue_name: text)
+// RETURNS TABLE(queue_name text, queue_length bigint, newest_msg_age_sec integer, oldest_msg_age_sec integer, total_messages bigint, scrape_time timestamp with time zone)
 
-  // pgmq.metrics (queue_name: text)
-  // RETURNS TABLE(queue_name text, queue_length bigint, newest_msg_age_sec integer, oldest_msg_age_sec integer, total_messages bigint, scrape_time timestamp with time zone)
+app.post("/api/v1/metrics", async (c) => {
+  const { queue_name } = await c.req.json<{ queue_name: string }>();
+  const result = await withClient(c.env, async (client) => {
+    const r = await client.query<MetricRecord>(
+      { rowMode: "array", text: "SELECT * FROM pgmq.metrics($1::text)", name: "metrics" },
+      [queue_name],
+    );
+    return r.rows.map((row: MetricRecord) => [row[0], Number(row[1]), row[2], row[3], Number(row[4]), row[5]]);
+  });
+  return c.json(result);
+});
 
-  .post(
-    "/api/v1/metrics",
-    async ({ body: { queue_name } }) => {
-      return await withClient(async (client) => {
-        const result = await client.query<MetricRecord>(
-          {
-            rowMode: "array",
-            text: "SELECT * FROM pgmq.metrics($1::text)",
-            name: "metrics",
-          },
-          [queue_name],
-        );
-        return result.rows.map((row) => [row[0], Number(row[1]), row[2], row[3], Number(row[4]), row[5]]);
-      });
-    },
-    { body: t.Object({ queue_name: t.String() }), response: t.Array(MetricRecordSchema), tags: ["Utilities"] },
-  )
+// pgmq.metrics_all ()
+// RETURNS TABLE(queue_name text, queue_length bigint, newest_msg_age_sec integer, oldest_msg_age_sec integer, total_messages bigint, scrape_time timestamp with time zone)
 
-  // pgmq.metrics_all ()
-  // RETURNS TABLE(queue_name text, queue_length bigint, newest_msg_age_sec integer, oldest_msg_age_sec integer, total_messages bigint, scrape_time timestamp with time zone)
+app.post("/api/v1/metrics_all", async (c) => {
+  const result = await withClient(c.env, async (client) => {
+    const r = await client.query<MetricRecord>({ rowMode: "array", text: "SELECT * FROM pgmq.metrics_all()", name: "metrics_all" });
+    return r.rows.map((row: MetricRecord) => [row[0], Number(row[1]), row[2], row[3], Number(row[4]), row[5]]);
+  });
+  return c.json(result);
+});
 
-  .post(
-    "/api/v1/metrics_all",
-    async (): Promise<[string, number, number | null, number | null, number, Date][]> => {
-      return await withClient(async (client) => {
-        const result = await client.query<MetricRecord>({ rowMode: "array", text: "SELECT * FROM pgmq.metrics_all()", name: "metrics_all" });
-        return result.rows.map((row) => [row[0], Number(row[1]), row[2], row[3], Number(row[4]), row[5]]);
-      });
-    },
-    { response: t.Array(MetricRecordSchema), tags: ["Utilities"] },
-  )
+// Cloudflare Worker export — also starts a local Deno server for development
+export default app;
 
-  .listen(8080);
-
-console.log(`Server running at http://${app.server?.hostname}:${app.server?.port}`);
+if (typeof Deno !== "undefined") {
+  const port = 8080;
+  console.log(`Server running at http://localhost:${port}`);
+  Deno.serve({ port }, app.fetch);
+}

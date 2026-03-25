@@ -35,3 +35,9 @@ coverage/
 
 # Yarn Integrity file
 .yarn-integrity
+
+# Wrangler / Cloudflare Worker
+.wrangler/
+
+# Deno cache
+.deno/
